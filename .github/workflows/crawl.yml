@@ -53,7 +53,7 @@ jobs:
       - name: Require all connection secrets
         run: |
           for key in TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_STRING_SESSION SUPPLIER_BOTS WORKER_SYNC_URL SYNC_TOKEN; do
-            if [ -z "$\\{!key}" ]; then
+            if [ -z "${!key}" ]; then
               echo "::error::Missing $key — configure repository secrets/variables first."
               exit 1
             fi
