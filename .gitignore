@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+.venv/
+venv/
+ENV/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Telegram sessions & secrets
+*.session
+*.session-journal
+.env
+
+# VS Code & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
