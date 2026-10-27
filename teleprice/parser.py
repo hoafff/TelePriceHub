@@ -82,7 +82,7 @@ class MessageParser:
             else:
                 priority = 0
             money = re.search(
-                r"(?:\$\s*(\d+(?:[.,]\d{1,3})?)\s*(?:USD|USDT)?|"
+                r"(?:\$\s*(\d+(?:[.,]\d{1,3})?)\s*(?:USDT|USD)?|"
                 r"(\d+(?:[.,]\d+)?)\s*(USDT|USD|\$)|"
                 r"(?:USDT|USD)\s*(\d+(?:[.,]\d+)?)|"
                 r"(\d[\d.,\s]*)\s*(vnđ|vnd|đ)\b|"
