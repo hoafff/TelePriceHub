@@ -83,6 +83,11 @@ def cmd_crawl(args: argparse.Namespace) -> None:
         client.loop.run_until_complete(_run())
 
 
+def cmd_sync(args: argparse.Namespace) -> None:
+    from teleprice.cloud_sync import publish
+    count = publish(Database(config.db_path))
+    print(f"Đã đồng bộ {count} báo giá lên Cloudflare D1.")
+
 def cmd_bot(args: argparse.Namespace) -> None:
     from teleprice.bot import QueryBot
 
@@ -116,6 +121,9 @@ def main() -> None:
     report_p = subparsers.add_parser("report", help="Xem bảng so sánh giá trong terminal")
     report_p.add_argument("--search", type=str, default="", help="Từ khóa tìm kiếm sản phẩm")
 
+    # cloud synchronization
+    subparsers.add_parser("sync", help="Đẩy báo giá lên Cloudflare Worker + D1")
+
     # bot
     subparsers.add_parser("bot", help="Chạy Telegram Bot tra cứu giá cho người dùng")
 
@@ -128,6 +136,8 @@ def main() -> None:
         cmd_crawl(args)
     elif args.command == "report":
         cmd_report(args)
+    elif args.command == "sync":
+        cmd_sync(args)
     elif args.command == "bot":
         cmd_bot(args)
     elif args.command == "test":
