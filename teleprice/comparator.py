@@ -38,12 +38,13 @@ class PriceComparator:
         """Groups raw database offer rows into structured ProductComparison objects."""
         grouped: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
         for o in offers:
-            key = (o["canonical_name"], o["spec_key"])
-            grouped[key].append(o)
+            key = (o["canonical_name"], o["spec_key"], o["currency"])
+            if bool(o.get("in_stock", 1)) and float(o["price"]) > 0:
+                grouped[key].append(o)
 
         results: List[ProductComparison] = []
 
-        for (canonical_name, spec_key), rows in grouped.items():
+        for (canonical_name, spec_key, row_currency), rows in grouped.items():
             # Sort by price ascending
             sorted_rows = sorted(rows, key=lambda r: float(r["price"]))
             if not sorted_rows:
@@ -51,7 +52,7 @@ class PriceComparator:
 
             min_price = float(sorted_rows[0]["price"])
             max_price = float(sorted_rows[-1]["price"])
-            currency = sorted_rows[0].get("currency", "VND")
+            currency = row_currency  # never rank USD against VND without a rate
             brand = sorted_rows[0].get("brand", "")
 
             rankings: List[SupplierRanking] = []
