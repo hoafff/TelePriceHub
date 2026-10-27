@@ -1,9 +1,6 @@
 name: TelePriceHub — Deploy Cloudflare Worker
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['cloud/**', '.github/workflows/deploy-cloud.yml']
 permissions:
   contents: read
 jobs:
