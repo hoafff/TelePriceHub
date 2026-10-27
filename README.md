@@ -1,132 +1,85 @@
-# TelePriceHub 🚀
+# TelePriceHub — Cloud-ready Telegram price aggregator
 
-> Hệ thống tự động thu thập báo giá đa tầng từ các Bot Telegram nhà cung cấp, chuẩn hóa thông số (spec-preserving), lưu trữ SQLite và tra cứu giá rẻ nhất.
+Automatically browse supplier bot menus using your Telegram account (Telethon), parse and normalize offers, and compare prices through an **always-on Telegram query bot** backed by Cloudflare Worker + D1.
 
----
+**You do not need to host anything on your own computer.** GitHub Actions runs the collector four times per day, Cloudflare Worker handles Telegram requests 24/7, and D1 retains offers/history across scheduled jobs. **One-time account creation and credential setup are still required**, because we cannot create a Telegram or Cloudflare account for you.
 
-## 📌 Tính năng cốt lõi
+## Architecture
 
-1. **MTProto Userbot Crawler (`teleprice/crawler.py`)**:
-   - Vượt qua giới hạn "Bot không thể nhắn tin/bấm nút Bot khác" bằng Telethon MTProto user account.
-   - Duyệt menu inline buttons đa cấp theo thuật toán DFS.
-   - Xử lý mượt mà cả 2 cơ chế: `editMessage` (sửa tin nhắn tại chỗ) và gửi tin nhắn mới.
-   - Cơ chế phát hiện chu kỳ (Cycle Detection) bằng băm trạng thái SHA-256 `(btn_text + btn_data + context_hash)` và danh sách đen nút điều hướng (`Quay lại`, `Trang chủ`, `Mua ngay`).
-   - Tự động bóp nghẹt tần số (Throttling / Jitter: 1.5s - 3.0s) và đón bắt `FloodWaitError` để bảo vệ tài khoản Telegram.
+1. GitHub Actions schedule: `python main.py crawl` (fresh crawl each run; never reuse a permanent visited set).
+2. `python main.py sync` uploads verified offers to the private Cloudflare Worker `/ingest` with `SYNC_TOKEN`.
+3. Worker stores offers and price changes in D1; offers older than 24 hours are hidden until refreshed.
+4. Telegram webhook `/telegram` validates a secret header and restricts access to an allowed user ID; commands: `/help`, `/search netflix`, `/compare netflix`, `/top`, `/status`.
 
-2. **Bộ bóc tách không tốn chi phí (`teleprice/parser.py`)**:
-   - Sử dụng regex chuyên sâu trích xuất: giá (`đ`, `k`, `VND`, `$`, `USDT`), tình trạng tồn kho, thời hạn (`1 tháng`, `3 tháng`, `1 năm`), thông số phần cứng (`CPU`, `RAM`, `SSD/NVMe`, `Độ phân giải 4K`).
-   - Tự động sinh `spec_key` (Ví dụ: `duration:1m|plan:premium|quality:4k` hoặc `cpu:2core|ram:4gb|storage:64gb`).
+**Security:** Session strings and bot credentials belong in GitHub Secrets. They must never go in the repository or in logs. `/ingest` is authenticated, Telegram webhook verifies its secret, and the query bot fails closed if no users are allowed. The collector never intentionally opens URL buttons, login/pay buttons, or purchase/checkout actions. External supplier bot behavior cannot be guaranteed; test with one permitted bot first.
 
-3. **Bộ khử trùng lặp sản phẩm & Gemini Fallback (`teleprice/matcher.py`)**:
-   - **Tầng 1 (0 VNĐ)**: Chuẩn hóa slug và từ khóa thương hiệu (Netflix, Spotify, Canva, Jetbrains, VPS...).
-   - **Tầng 2 (Gemini API Free Tier)**: Chỉ gọi khi gặp sản phẩm lạ chưa từng thấy. Có guardrail cấm gộp sản phẩm khác thông số (RAM khác, dung lượng khác, thời hạn khác). Caching SQLite vĩnh viễn.
+## Cloud-only setup (no localhost)
 
-4. **Bảng so sánh & Xếp hạng nhà cung cấp (`teleprice/comparator.py`)**:
-   - Tìm giá thấp nhất, tính chênh lệch tuyệt đối và phần trăm so với bên rẻ nhất.
-   - Xếp hạng Top 1, Top 2, Top 3...
-   - Xuất Markdown table trực quan.
+### A. Required services
 
-5. **Bot tra cứu cá nhân (`teleprice/bot.py`)**:
-   - Tra cứu qua lệnh `/search <tên>`, xem bảng so sánh `/compare <tên>`, xem thống kê `/status`.
-   - Phân quyền theo Whitelist `ALLOWED_USER_IDS`.
+- GitHub account with this repo: `hoafff/TelePriceHub`
+- A Telegram user account, a bot created via @BotFather, Telegram API credentials from [my.telegram.org](https://my.telegram.org)
+- Cloudflare account with Workers and D1 enabled. Create a D1 database named **telepricehub**. Copy its database ID and your account ID. Enable your `workers.dev` subdomain.
+- A Cloudflare API token with permissions to edit Workers scripts and D1 databases, restricted to your account.
 
-6. **Môi trường giả lập Mock Bot (`teleprice/mock.py`)**:
-   - Chạy kiểm thử toàn bộ đường ống thu thập và thuật toán mà không cần tài khoản Telegram thật hay API key.
+### B. GitHub Actions secrets (Settings → Secrets and variables → Actions)
 
----
+| Secret | Value |
+| --- | --- |
+| `TELEGRAM_API_ID` | Telegram developer application ID |
+| `TELEGRAM_API_HASH` | Telegram developer application hash |
+| `TELEGRAM_STRING_SESSION` | One-time Telethon StringSession created using `generate_session.py` |
+| `BOT_TOKEN` | Your query bot token (@BotFather) |
+| `ALLOWED_USER_IDS` | Your Telegram numeric user ID; comma-delimit for multiple users |
+| `TELEGRAM_WEBHOOK_SECRET` | Long random letters/digits/`_`/`-`; independent of bot token |
+| `SYNC_TOKEN` | Different high-entropy random secret for ingestion |
+| `CLOUDFLARE_API_TOKEN` | Limited Cloudflare API token |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
+| `CF_D1_DATABASE_ID` | D1 database UUID |
+| `WORKER_URL` | Complete URL, e.g. `https://telepricehub-bot.YOUR_SUBDOMAIN.workers.dev` |
+| `FX_USD_VND` | Optional manually chosen number, e.g. **your verified rate**; otherwise USD is not compared with VND |
+| `FX_USDT_VND` | Optional separately chosen USDT/VND rate |
+| `GEMINI_API_KEY` | Optional; leave blank if not using Gemini |
 
-## 📂 Cấu trúc thư mục
+**Actions repository variable** (`Variables`, NOT Secrets): `SUPPLIER_BOTS` = `@supplier_a_bot,@supplier_b_bot`. Only collect from sources you are permitted to access. Never use multiple Telegram accounts to circumvent rate limits.
 
-```text
-TelePriceHub/
-├── .github/
-│   └── workflows/
-│       └── crawl.yml           # GitHub Actions chạy cron định kỳ
-├── teleprice/
-│   ├── __init__.py
-│   ├── config.py              # Đọc cấu hình từ .env và biến môi trường
-│   ├── db.py                  # Schema SQLite, Indexing, CRUD
-│   ├── parser.py              # Bóc tách Regex giá, thông số, trạng thái kho
-│   ├── matcher.py             # Chuẩn hóa tên sản phẩm & Gemini fallback
-│   ├── comparator.py          # Tính chênh lệch giá & sinh bảng xếp hạng
-│   ├── crawler.py             # Telethon MTProto crawler duyệt cây menu
-│   ├── bot.py                 # Telegram Bot tra cứu cá nhân
-│   └── mock.py                # Mock Telegram Client & Supplier Bot Simulator
-├── tests/
-│   └── test_core.py           # Unit tests & Integration tests
-├── .env.example               # Mẫu cấu hình môi trường
-├── generate_session.py        # Tiện ích tạo StringSession cho GitHub Actions
-├── main.py                    # CLI điều khiển trung tâm
-├── requirements.txt           # Thư viện phụ thuộc
-└── README.md
-```
+For the one-time `TELEGRAM_STRING_SESSION`, run `python generate_session.py` once in a trusted interactive environment such as GitHub Codespaces or your PC. Enter your own phone/OTP and store the resulting string directly in the GitHub Secret. **This is one-time registration, not localhost hosting.** Anyone with this session can access your Telegram account; use a dedicated account if feasible.
 
----
+### C. Deploy
 
-## 🛠 Hướng dẫn cài đặt trên Windows 11 (VS Code)
+1. On GitHub open **Actions → TelePriceHub — Deploy Cloudflare Worker → Run workflow**. It applies `cloud/schema.sql`, deploys the Worker, configures its secrets, and registers the Telegram webhook.
+2. In a browser open `https://telepricehub-bot.YOUR_SUBDOMAIN.workers.dev/health`. Expected JSON: `{"ok":true,"service":"TelePriceHub"}`.
+3. Run **Actions → TelePriceHub — Cloud Crawler → Run workflow**. The tests run first, followed by a live crawl and upload to D1. Read the job logs; they must not show Telegram session values.
+4. Message your bot: `/status`, `/search netflix`, or `/compare netflix`.
 
-### Bước 1: Mở dự án trong VS Code
-Mở VS Code, chọn **File > Open Folder** và chọn thư mục `TelePriceHub`.
-Mở Terminal tích hợp trong VS Code (`Ctrl + ~`).
+After setup, the bot works independently of your computer. GitHub Actions cron may start late or skip runs under load; the 24-hour freshness rule prevents very old prices from being presented as current. This is a practical zero-localhost deployment, **not** a promise of guaranteed real-time provider updates.
 
-### Bước 2: Tạo Virtual Environment và cài đặt
-Khuyến nghị sử dụng Python 3.11:
+### D. Common issues
 
-```powershell
-# Sử dụng uv (cực nhanh) hoặc python chuẩn:
-uv venv --python 3.11 .venv
-.\.venv\Scripts\activate
+- **Missing secret:** CI aborts with the name of the missing variable instead of claiming success with mock data.
+- **Cloudflare D1 migration failed:** Check that D1 database is named `telepricehub`, database UUID is correct, and token has D1 Edit.
+- **Bot no replies:** Inspect the deployment run's `setWebhook` step, confirm `WORKER_URL`, `ALLOWED_USER_IDS` and webhook secret.
+- **No prices:** Check the crawler workflow and whether Telegram bot requires extra confirmation, payment, CAPTCHA or non-standard menu buttons. The crawler never bypasses those.
+- **USD vs VND:** No comparison without explicit FX settings, so prices cannot be incorrectly sorted as raw values.
+- **Data appears stale:** Only available offers seen within `MAX_AGE_HOURS` (default 24) are considered for a cheapest-price claim.
+- **Live crawl:** Not yet verified with your supplier bots. Start with one and review the logs.
 
-# Cài đặt dependencies:
-uv pip install -r requirements.txt
-# hoặc: pip install -r requirements.txt
-```
+## Local optional developer tests
 
-### Bước 3: Chạy thử nghiệm ngay với chế độ Mock (Không cần API key)
+Local testing is **optional**, never required for production hosting.
 
-```powershell
-# 1. Chạy toàn bộ Unit & Integration Tests:
+```bash
+pip install -r requirements.txt
 python main.py test
-
-# 2. Chạy crawler với Bot nhà cung cấp giả lập:
 python main.py crawl --mock
-
-# 3. Xem bảng so sánh giá ngay trong terminal:
 python main.py report
 ```
 
-### Bước 4: Cấu hình tài khoản Telegram thật (Khi sẵn sàng)
+Code layout: `teleprice/crawler.py` (Telethon), `teleprice/parser.py`, `teleprice/matcher.py`, `teleprice/db.py`, `teleprice/comparator.py`, `teleprice/cloud_sync.py`, `cloud/worker.js`, `cloud/schema.sql`, `cloud/wrangler.toml`, `.github/workflows/crawl.yml` and `deploy-cloud.yml`.
 
-1. Sao chép `.env.example` thành `.env`:
-   ```powershell
-   copy .env.example .env
-   ```
-2. Lấy `TELEGRAM_API_ID` và `TELEGRAM_API_HASH` từ [my.telegram.org](https://my.telegram.org/apps).
-3. Lấy `BOT_TOKEN` cho Bot tra cứu từ `@BotFather`.
-4. Điền danh sách bot nhà cung cấp vào `SUPPLIER_BOTS` (ví dụ `@bot1,@bot2`).
-5. (Tùy chọn) Điền `GEMINI_API_KEY` từ [Google AI Studio](https://aistudio.google.com/app/apikey).
-6. Chạy crawler thật:
-   ```powershell
-   python main.py crawl
-   ```
-   *(Lần đầu chạy, Telethon sẽ hỏi số điện thoại và mã OTP gửi về Telegram của bạn để tạo file session)*.
-7. Chạy Bot tra cứu:
-   ```powershell
-   python main.py bot
-   ```
+## Limits / known constraints
 
----
-
-## ☁️ Đánh giá triển khai: GitHub Actions vs VPS vs Local PC
-
-| Tiêu chí | GitHub Actions (Cron) | VPS Giá rẻ / Oracle Free Tier | Local PC (Windows 11) |
-| :--- | :--- | :--- | :--- |
-| **Chi phí** | 0 VNĐ (2000 phút/tháng free) | 0 VNĐ (Oracle) hoặc ~70-100k/tháng | 0 VNĐ |
-| **Bảo vệ Session Telegram** | ⚠️ **Rủi ro cao**: IP của GitHub Actions thuộc dải Azure Datacenter, đăng nhập userbot thường xuyên bị Telegram gắn cờ spam, bắt OTP lại hoặc revoke session. | 🟢 **An toàn cao**: IP tĩnh cố định, ít bị kiểm tra bảo mật bất thường. | 🟢 **An toàn nhất**: IP mạng gia đình là IP đáng tin cậy nhất đối với hệ thống chống gian lận của Telegram. |
-| **Lưu trữ trạng thái (DB)** | Tạm thời (Phải upload Artifact hoặc Commit DB vào repo hoặc dùng Cloud DB). | SQLite lưu trực tiếp trên ổ đĩa SSD vĩnh viễn. | SQLite lưu trực tiếp ổ E:\ hoặc C:\. |
-| **Thời gian chạy tối đa** | 6 tiếng / job (dư dả cho 1 lần crawl). | 24/7 không giới hạn. | Phụ thuộc vào thời gian bật máy. |
-| **Bot tra cứu người dùng** | ❌ Không chạy được bot tra cứu liên tục (chỉ chạy dạng webhook nếu kết hợp serverless). | 🟢 Chạy bot tra cứu 24/7 liên tục bằng long-polling. | 🟡 Chỉ tra cứu khi mở máy. |
-
-**Khuyến nghị tối ưu:**
-- **Giải pháp 0đ bền vững nhất:** Chạy định kỳ trên PC Windows 11 bằng Windows Task Scheduler khi bật máy, hoặc dùng 1 máy tính mini/Raspberry Pi/Oracle Cloud Always Free (IP cố định).
-- **Nếu dùng GitHub Actions:** Bắt buộc dùng `StringSession` (chạy `python generate_session.py` trên máy cá nhân trước để lấy chuỗi session và lưu vào GitHub Secret), tuyệt đối không để lộ file `.session`.
+- Some bots require WebApp login, external links, or complicated stateful workflows. No universal crawler is guaranteed to navigate every provider bot.
+- The parser currently extracts a single detail item from each product view. Menus containing multiple different products as unstructured text may need supplier-specific parsers.
+- Crawls are scheduled, not continuous, and a failed cron run starts a fresh scan at the next successful attempt; D1 stores historical price changes separately.
+- Cloudflare free-plan and GitHub Actions execution limits, provider API rules, and Telegram behavior can change.
