@@ -73,7 +73,7 @@ class MessageParser:
         candidates = []
         for line in text.splitlines():
             low = line.lower()
-            if not re.search(r"giá|price|cost|\$|vnd|vnđ|usdt|usd|\d\s*k\b|\d+đ\b", low):
+            if not re.search(r"giá|price|cost|\$|vnd|vnđ|usdt|usd|\d+đ\b", low):
                 continue
             if re.search(r"giá\s*(?:gốc|niêm yết)|original\s*price|list\s*price|giá\s*cũ", low):
                 priority = -10
@@ -82,7 +82,7 @@ class MessageParser:
             else:
                 priority = 0
             money = re.search(
-                r"(?:\$\s*(\d+(?:[.,]\d{1,3})?)|"
+                r"(?:\$\s*(\d+(?:[.,]\d{1,3})?)\s*(?:USD|USDT)?|"
                 r"(\d+(?:[.,]\d+)?)\s*(USD|USDT|\$)|"
                 r"(?:USD|USDT)\s*(\d+(?:[.,]\d+)?)|"
                 r"(\d[\d.,\s]*)\s*(vnđ|vnd|đ)\b|"
@@ -204,13 +204,6 @@ class MessageParser:
 
     @staticmethod
     def _extract_title(text: str, fallback: str) -> str:
-        if fallback:
-            cleaned = re.sub(r"^[0-9\.\-\–\s]+", "", fallback).strip()
-            if len(cleaned) >= 3 and not any(
-                h in cleaned.lower() for h in ["mua ngay", "đặt hàng", "quay lại", "back"]
-            ):
-                return cleaned
-
         lines = [line.strip() for line in text.split("\n") if line.strip()]
 
         # 1. Check for explicit name label (e.g. "Tên: Netflix Premium", "Sản phẩm: Spotify")
@@ -222,6 +215,14 @@ class MessageParser:
                 cleaned = re.sub(r"[*_`#⭐\-\–]", "", m.group(1)).strip()
                 if len(cleaned) >= 3:
                     return cleaned
+
+        # Explicit product name wins over button labels, which may omit the plan/tier.
+        if fallback:
+            cleaned = re.sub(r"^[0-9\.\-\–\s]+", "", fallback).strip()
+            if len(cleaned) >= 3 and not any(
+                h in cleaned.lower() for h in ["mua ngay", "đặt hàng", "quay lại", "back"]
+            ):
+                return cleaned
 
         # 2. Skip decorative headers and metadata lines
         for line in lines:
