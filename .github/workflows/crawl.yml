@@ -1,57 +1,65 @@
-name: TelePriceHub Crawler & Price Sync
-
+name: TelePriceHub — Cloud Crawler
 on:
   schedule:
-    # Chạy mỗi 6 tiếng một lần (UTC)
-    - cron: '0 */6 * * *'
-  workflow_dispatch: # Cho phép kích hoạt thủ công từ giao diện GitHub
-
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main, fix/cloud-ready-20261027]
+    paths:
+      - 'teleprice/**'
+      - 'tests/**'
+      - 'main.py'
+      - 'requirements.txt'
+      - '.github/workflows/crawl.yml'
+permissions:
+  contents: read
+concurrency:
+  group: telegram-price-crawl
+  cancel-in-progress: false
 jobs:
-  crawl_and_sync:
+  tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python main.py test
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run verification tests
-        run: |
-          python main.py test
-
-      - name: Run Crawler
-        env:
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          TELEGRAM_STRING_SESSION: ${{ secrets.TELEGRAM_STRING_SESSION }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          SUPPLIER_BOTS: ${{ vars.SUPPLIER_BOTS }}
-          DB_PATH: "teleprice.db"
-        run: |
-          # Nếu có cấu hình StringSession thì chạy crawl thật, ngược lại chạy mock test
-          if [ -n "$TELEGRAM_STRING_SESSION" ]; then
-            python main.py crawl
-          else
-            echo "TELEGRAM_STRING_SESSION chưa cấu hình. Chạy mock crawl để kiểm tra đường ống..."
-            python main.py crawl --mock
-          fi
-          python main.py report
-
-      - name: Upload Database Artifact
-        uses: actions/upload-artifact@v4
+  crawl:
+    # Do not crawl on every code push; run only on schedule/manual dispatch.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+      TELEGRAM_STRING_SESSION: ${{ secrets.TELEGRAM_STRING_SESSION }}
+      SUPPLIER_BOTS: ${{ vars.SUPPLIER_BOTS }}
+      WORKER_SYNC_URL: ${{ secrets.WORKER_URL }}
+      SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      DB_PATH: teleprice.db
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          name: teleprice-sqlite-db
-          path: teleprice.db
-          retention-days: 14
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Require all connection secrets
+        run: |
+          for key in TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_STRING_SESSION SUPPLIER_BOTS WORKER_SYNC_URL SYNC_TOKEN; do
+            if [ -z "$\\{!key}" ]; then
+              echo "::error::Missing $key — configure repository secrets/variables first."
+              exit 1
+            fi
+          done
+        shell: bash
+      - name: Crawl all suppliers, using fresh state each run
+        run: python main.py crawl
+      - name: Publish snapshot to persistent Cloudflare D1
+        run: python main.py sync
