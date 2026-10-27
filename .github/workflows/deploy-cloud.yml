@@ -1,0 +1,64 @@
+name: TelePriceHub — Deploy Cloudflare Worker
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['cloud/**', '.github/workflows/deploy-cloud.yml']
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      ALLOWED_USER_IDS: ${{ secrets.ALLOWED_USER_IDS }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+      SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      WORKER_URL: ${{ secrets.WORKER_URL }}
+      FX_USD_VND: ${{ secrets.FX_USD_VND }}
+      FX_USDT_VND: ${{ secrets.FX_USDT_VND }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate required configuration
+        run: |
+          for key in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CF_D1_DATABASE_ID BOT_TOKEN ALLOWED_USER_IDS TELEGRAM_WEBHOOK_SECRET SYNC_TOKEN WORKER_URL; do
+            if [ -z "$\\{!key}" ]; then echo "::error::Missing secret: $key"; exit 1; fi
+          done
+        shell: bash
+      - name: Configure D1 binding
+        run: sed -i "s/REPLACE_WITH_D1_DATABASE_ID/$CF_D1_DATABASE_ID/g" cloud/wrangler.toml
+      - name: Apply schema to remote D1
+        run: npx --yes wrangler@4 d1 execute telepricehub --remote --file cloud/schema.sql --config cloud/wrangler.toml
+      - name: Deploy Worker
+        run: npx --yes wrangler@4 deploy --config cloud/wrangler.toml
+      - name: Securely configure Worker secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$BOT_TOKEN" | npx --yes wrangler@4 secret put BOT_TOKEN --config cloud/wrangler.toml
+          printf '%s' "$ALLOWED_USER_IDS" | npx --yes wrangler@4 secret put ALLOWED_USER_IDS --config cloud/wrangler.toml
+          printf '%s' "$TELEGRAM_WEBHOOK_SECRET" | npx --yes wrangler@4 secret put TELEGRAM_WEBHOOK_SECRET --config cloud/wrangler.toml
+          printf '%s' "$SYNC_TOKEN" | npx --yes wrangler@4 secret put SYNC_TOKEN --config cloud/wrangler.toml
+          if [ -n "$FX_USD_VND" ]; then
+            printf '%s' "$FX_USD_VND" | npx --yes wrangler@4 secret put FX_USD_VND --config cloud/wrangler.toml
+          fi
+          if [ -n "$FX_USDT_VND" ]; then
+            printf '%s' "$FX_USDT_VND" | npx --yes wrangler@4 secret put FX_USDT_VND --config cloud/wrangler.toml
+          fi
+      - name: Register Telegram webhook
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            -X POST "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
+            --data-urlencode "url=$WORKER_URL/telegram" \
+            --data-urlencode "secret_token=$TELEGRAM_WEBHOOK_SECRET" \
+            --data-urlencode 'allowed_updates=["message"]'
+      - name: Check cloud health
+        run: curl --fail --show-error --silent "$WORKER_URL/health"
