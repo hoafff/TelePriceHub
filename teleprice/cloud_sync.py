@@ -18,6 +18,8 @@ def publish(db: Database) -> int:
          "in_stock": int(o["in_stock"])}
         for o in offers
     ]
+    if not rows:
+        raise RuntimeError("Crawl produced no offers; refusing empty cloud synchronization")
     count = 0
     for start in range(0, len(rows), 60):
         body = json.dumps({"offers": rows[start:start+60]}, ensure_ascii=False).encode()
