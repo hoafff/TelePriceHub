@@ -40,7 +40,7 @@ class MessageParser:
 
     # Stock patterns
     _RE_OUT_OF_STOCK = re.compile(
-        r"(hết hàng|out of stock|tạm hết|sold out|hết slot)", re.IGNORECASE
+        r"(hết hàng|out of stock|tạm hết|sold out|hết slot|stock:\s*0\b)", re.IGNORECASE
     )
     _RE_IN_STOCK = re.compile(
         r"(còn hàng|sẵn hàng|in stock|có sẵn|sẵn slot|stock:\s*\d+)", re.IGNORECASE
@@ -67,49 +67,48 @@ class MessageParser:
         if not text and not fallback_title:
             return ParsedProduct(is_product=False, name="")
 
-        # 1. Price extraction
+        # 1. Parse explicit prices per line and prefer discounted selling prices.
         price = None
         currency = "VND"
-
-        # Check VND with đ / vnd / vnđ
-        vnd_match = cls._RE_PRICE_VND.search(text)
-        if vnd_match:
-            raw_val = vnd_match.group(1).replace(".", "").replace(",", "").strip()
-            if raw_val.isdigit():
-                price = float(raw_val)
-                currency = "VND"
-
-        # Check 'k' suffix
-        if price is None:
-            k_match = cls._RE_PRICE_K.search(text)
-            if k_match:
-                raw_val = (k_match.group(1) or k_match.group(2) or "").replace(".", "").replace(",", "").strip()
-                if raw_val.isdigit():
-                    price = float(raw_val) * 1000.0
-                    currency = "VND"
-
-        if price is None:
-            usd_match = cls._RE_PRICE_USD.search(text)
-            if usd_match:
-                raw_val = usd_match.group(1).replace(",", "").strip()
-                try:
-                    price = float(raw_val)
-                    currency = "USD"
-                    if "usdt" in usd_match.group(0).lower():
-                        currency = "USDT"
-                except ValueError:
-                    pass
-
-        if price is None:
-            standalone = cls._RE_PRICE_STANDALONE.search(text)
-            if standalone:
-                raw_val = standalone.group(1).replace(".", "").replace(",", "").strip()
-                if raw_val.isdigit():
-                    price = float(raw_val)
-                    if price < 1000 and price > 0:
-                        currency = "USD"
-                    else:
-                        currency = "VND"
+        candidates = []
+        for line in text.splitlines():
+            low = line.lower()
+            if not re.search(r"giá|price|cost|\$|vnd|vnđ|usdt|usd|\d\s*k\b|\d+đ\b", low):
+                continue
+            if re.search(r"giá\s*(?:gốc|niêm yết)|original\s*price|list\s*price|giá\s*cũ", low):
+                priority = -10
+            elif re.search(r"khuyến mãi|ưu đãi|giá\s*bán|sale|discount|now|giá\s*cuối|thực thu", low):
+                priority = 10
+            else:
+                priority = 0
+            money = re.search(
+                r"(?:\$\s*(\d+(?:[.,]\d{1,3})?)|"
+                r"(\d+(?:[.,]\d+)?)\s*(USD|USDT|\$)|"
+                r"(?:USD|USDT)\s*(\d+(?:[.,]\d+)?)|"
+                r"(\d[\d.,\s]*)\s*(vnđ|vnd|đ)\b|"
+                r"(\d+(?:[.,]\d+)?)\s*k\b)",
+                line, re.I)
+            if not money and re.search(r"^\s*(?:giá|price|cost)\s*[:：]", line, re.I):
+                money = re.search(r"(\d+(?:[.,]\d+)?)", line)
+            if not money:
+                continue
+            raw = next((x for x in money.groups() if x and re.search(r"\d", x)), None)
+            if not raw:
+                continue
+            raw = raw.strip().replace(" ", "")
+            cur = "VND"
+            if re.search(r"\$|USDT|USD", money.group(0), re.I):
+                cur = "USDT" if "usdt" in money.group(0).lower() else "USD"
+                value = float(raw.replace(",", ""))
+            elif re.search(r"k\s*$", money.group(0), re.I):
+                value = float(raw.replace(",", ".")) * 1000
+            else:
+                value = float(re.sub(r"[.,]", "", raw)) if re.search(r"[.,]\d{3}$", raw) else float(raw.replace(",", "."))
+            if value > 0:
+                candidates.append((priority, len(candidates), value, cur))
+        if candidates:
+            chosen = max(candidates, key=lambda x: (x[0], -x[1]))
+            price, currency = chosen[2], chosen[3]
 
         # If no price found, check if it's likely a category menu, not a product page
         if price is None:
@@ -167,6 +166,13 @@ class MessageParser:
         )
         if plan_match:
             specs["plan"] = plan_match.group(1).lower()
+
+        if re.search(r"nâng (?:chính chủ|cấp)|upgrade|nâng cấp", text+" "+fallback_title, re.I):
+            specs["delivery"] = "upgrade"
+        elif re.search(r"shared|dùng chung|chia sẻ", text+" "+fallback_title, re.I):
+            specs["delivery"] = "shared"
+        elif re.search(r"tài khoản riêng|private account|account riêng", text+" "+fallback_title, re.I):
+            specs["delivery"] = "private"
 
         # 4. Generate deterministic spec key
         # Crucial: specs must be sorted to ensure identical key representation
