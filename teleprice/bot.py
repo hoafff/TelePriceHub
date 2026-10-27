@@ -27,7 +27,7 @@ class QueryBot:
     ) -> None:
         self.token = bot_token or config.bot_token
         self.db = db or Database(config.db_path)
-        self.allowed_users = allowed_users or config.allowed_user_ids
+        self.allowed_users = allowed_users if allowed_users is not None else config.allowed_user_ids
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         self.last_update_id = 0
 
@@ -63,7 +63,7 @@ class QueryBot:
         from_id = msg.get("from", {}).get("id")
 
         # Security check: whitelist user ID
-        if self.allowed_users and from_id not in self.allowed_users:
+        if not self.allowed_users or from_id not in self.allowed_users:
             self.send_message(chat_id, "⛔ Bạn không có quyền truy cập bot tra cứu này.")
             return
 
